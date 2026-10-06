@@ -1,39 +1,24 @@
-:root {
-  --bg: #f5f3ee;
-  --surface: #fffdf9;
-  --surface-2: #efebe3;
-  --text: #24221e;
-  --muted: #77716a;
-  --border: #e3ddd2;
-  --accent: #3457d5;
-  --accent-soft: #e5eafb;
-  --accent-text: #ffffff;
-  --danger: #c62828;
-  --ok: #2e7d32;
-  --shadow: 0 1px 2px rgba(40, 30, 10, .05), 0 4px 16px rgba(40, 30, 10, .05);
-  --radius: 14px;
-  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --serif: "Fraunces", Georgia, "Times New Roman", serif;
-  color-scheme: light;
+﻿:root {
+  --bg: #0d0e1a;
+  --surface: #171a2c;
+  --surface-2: #232740;
+  --text: #f1f2fb;
+  --muted: #9a9fbd;
+  --border: #2b3050;
+  --accent: #8b7cff;
+  --accent-2: #4cc9f0;
+  --accent-grad: linear-gradient(135deg, #8b7cff 0%, #4cc9f0 100%);
+  --accent-soft: rgba(139, 124, 255, .16);
+  --accent-text: #0d0e1a;
+  --danger: #ff6b81;
+  --ok: #4ade80;
+  --shadow: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 8px 24px rgba(0, 0, 0, .35);
+  --radius: 18px;
+  --font: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  --serif: "Fraunces", Georgia, serif;
+  color-scheme: dark;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #141518;
-    --surface: #1d1e22;
-    --surface-2: #2a2b31;
-    --text: #ebe9e4;
-    --muted: #9c988f;
-    --border: #313238;
-    --accent: #8099ff;
-    --accent-soft: #252c47;
-    --accent-text: #0f1325;
-    --danger: #ef6b6b;
-    --ok: #6cc070;
-    --shadow: 0 1px 2px rgba(0, 0, 0, .3);
-    color-scheme: dark;
-  }
-}
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }

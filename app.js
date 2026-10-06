@@ -81,7 +81,7 @@ function render() {
     const main = $('#r-main');
     main.className = `view-${state.view}`;
     main.innerHTML = state.view === 'day'
-      ? `<div class="day-layout">
+      ? `<div id="r-hero"></div><div class="day-layout">
           <div class="col"><div id="r-events" class="slot-events"></div><div id="r-habits" class="slot-habits"></div></div>
           <div class="col"><div id="r-tasks" class="slot-tasks"></div><div id="r-note" class="slot-note"></div></div>
         </div>`
@@ -89,6 +89,7 @@ function render() {
   }
   if (state.view === 'day') {
     const k = dkey(state.cursor);
+    patch('r-hero', heroHTML(k));
     patch('r-events', eventsCard());
     patch('r-tasks', tasksCard(k));
     patch('r-note', noteCard(k));
@@ -187,19 +188,42 @@ function bannerHTML() {
 
 // ----- vista Día -----
 
+function heroHTML(k) {
+  const d = store.getDay(k);
+  const habits = store.getHabits();
+  const pending = d.tasks.filter(t => !t.movedTo && !t.done).length;
+  const hdone = habits.filter(h => d.habits[h.id]).length;
+  const evCount = eventsOn(state.cursor).length;
+  const hr = new Date().getHours();
+  const isToday = sameDay(state.cursor, new Date());
+  const greet = !isToday
+    ? (state.cursor < today() ? 'Mirando atrás' : 'Para planear')
+    : hr < 6 ? 'Buenas noches' : hr < 13 ? 'Buen día' : hr < 20 ? 'Buenas tardes' : 'Buenas noches';
+  const connected = g.getAccounts().some(g.isValid);
+  const stats = [
+    connected ? `<span class="stat s-ev"><b>${evCount}</b> ${evCount === 1 ? 'evento' : 'eventos'}</span>` : '',
+    `<span class="stat s-task"><b>${pending}</b> ${pending === 1 ? 'tarea pendiente' : 'tareas pendientes'}</span>`,
+    habits.length ? `<span class="stat s-habit"><b>${hdone}/${habits.length}</b> hábitos</span>` : '',
+  ].join('');
+  return `<section class="hero">
+    <div><p class="greet">${greet}</p><p class="hero-sub">${isToday ? 'Así viene tu día' : esc(cap(fLong.format(state.cursor)))}</p></div>
+    <div class="stats">${stats}</div>
+  </section>`;
+}
+
 function eventsCard() {
   const day = state.cursor;
   const evs = eventsOn(day);
   const canCreate = g.writableCalendars().length > 0;
   let body;
   if (!g.isConfigured()) {
-    body = `<div class="empty"><p>Todavía no conectaste Google Calendar.</p>
+    body = `<div class="empty"><div class="empty-ic">🗓️</div><p><b>Todavía no conectaste Google Calendar</b></p>
       <p class="muted small">Seguí los pasos del archivo <b>GUIA.md</b>. Es gratis y se hace una sola vez.</p></div>`;
   } else if (!g.getAccounts().length) {
-    body = `<div class="empty"><p>Conectá tus cuentas de Google para ver todos tus calendarios juntos.</p>
+    body = `<div class="empty"><div class="empty-ic">🗓️</div><p>Conectá tus cuentas de Google para ver todos tus calendarios juntos.</p>
       <button class="btn primary" data-action="add-account">Conectar cuenta de Google</button></div>`;
   } else if (!evs.length) {
-    body = `<div class="empty muted">${state.loading ? 'Cargando eventos…' : 'Nada agendado. Día libre ✨'}</div>`;
+    body = `<div class="empty muted"><div class="empty-ic">${state.loading ? '⏳' : '✨'}</div>${state.loading ? 'Cargando eventos…' : 'Nada agendado. Día libre'}</div>`;
   } else {
     const allDay = evs.filter(e => e.allDay);
     const timed = evs.filter(e => !e.allDay);
@@ -216,7 +240,7 @@ function eventsCard() {
       <div class="ev-list">${rows}</div>`;
   }
   return `<section class="card card-events">
-    <div class="card-h"><h2>Agenda</h2>${state.loading ? '<span class="spinner" aria-label="Cargando"></span>' : ''}
+    <div class="card-h"><h2><span class="ic">📅</span>Agenda</h2>${state.loading ? '<span class="spinner" aria-label="Cargando"></span>' : ''}
       ${canCreate ? `<button class="btn small" data-action="new-event" data-date="${dkey(day)}" title="Nuevo evento (N)">+ Evento</button>` : ''}</div>
     ${body}
   </section>`;
@@ -248,9 +272,9 @@ function tasksCard(k) {
         <button class="x" data-action="del-task" data-id="${t.id}" aria-label="Borrar tarea">×</button>
       </li>`).join('');
   return `<section class="card card-tasks">
-    <div class="card-h"><h2>Tareas</h2>${active.length ? `<span class="muted small">${done}/${active.length}</span>` : ''}</div>
+    <div class="card-h"><h2><span class="ic">✅</span>Tareas</h2>${active.length ? `<span class="count">${done}/${active.length}</span>` : ''}</div>
     ${active.length ? `<div class="progress"><span style="width:${Math.round((done / active.length) * 100)}%"></span></div>` : ''}
-    ${items ? `<ul class="tasks">${items}</ul>` : ''}
+    ${items ? `<ul class="tasks">${items}</ul>` : '<p class="hint">Nada pendiente. Escribí tu primera tarea acá abajo 👇</p>'}
     <form class="add-row" data-form="add-task" autocomplete="off">
       <input id="new-task" name="text" placeholder="Agregar tarea y apretar Enter…" aria-label="Nueva tarea">
     </form>
@@ -260,7 +284,7 @@ function tasksCard(k) {
 function noteCard(k) {
   const d = store.getDay(k);
   return `<section class="card card-note">
-    <div class="card-h"><h2>Notas</h2></div>
+    <div class="card-h"><h2><span class="ic">✍️</span>Notas</h2></div>
     <textarea id="note" class="note autosize" data-input="note" data-day="${k}" aria-label="Notas del día"
       placeholder="¿Qué pasó hoy? Ideas, cosas para recordar, lo que quieras…">${esc(d.note)}</textarea>
   </section>`;
@@ -277,7 +301,7 @@ function habitsCard(k) {
   const d = store.getDay(k);
   const habits = store.getHabits();
   return `<section class="card card-habits">
-    <div class="card-h"><h2>Hábitos</h2></div>
+    <div class="card-h"><h2><span class="ic">🔥</span>Hábitos y ánimo</h2></div>
     <div class="habits">${habits.map(h => {
       const on = !!d.habits[h.id];
       const s = on ? streak(h.id, k) : 0;
