@@ -1,10 +1,8 @@
-import { WEEK_START } from './config.js';
+﻿import { WEEK_START } from './config.js';
 import * as store from './store.js';
 import * as g from './google.js';
 
-const MOODS = ['😞', '😕', '😐', '🙂', '😄'];
-const MOOD_NAMES = ['Mal', 'Flojo', 'Normal', 'Bien', 'Excelente'];
-const VIEWS = { day: 'Día', week: 'Semana', month: 'Mes' };
+const VIEWS = { day: 'Día', week: 'Semana', month: 'Mes', diary: 'Diario' };
 
 // ---------- utilidades ----------
 
@@ -22,6 +20,7 @@ const today = () => startOfDay(new Date());
 const sameDay = (a, b) => dkey(a) === dkey(b);
 const startOfWeek = d => addDays(startOfDay(d), -((d.getDay() - WEEK_START + 7) % 7));
 const hm = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const hms = d => `${hm(d)}:${pad(d.getSeconds())}`;
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const fmt = opts => new Intl.DateTimeFormat('es-AR', opts);
 const fLong = fmt({ weekday: 'long', day: 'numeric', month: 'long' });
@@ -41,6 +40,8 @@ const state = {
   eventsKey: '',
   eventsAt: 0,
   loading: false,
+  editing: null, // id de la nota que se está editando
+  query: '',     // búsqueda en la vista Diario
 };
 let loadSeq = 0;
 let lastToday = dkey(today());
@@ -79,21 +80,31 @@ function render() {
     skeleton = state.view;
     for (const k of Object.keys(cache)) if (k !== 'r-head' && k !== 'r-banner') delete cache[k];
     const main = $('#r-main');
-    main.className = `view-${state.view}`;
+    main.className = `view-${state.view} animating`;
+    setTimeout(() => main.classList.remove('animating'), 800);
     main.innerHTML = state.view === 'day'
       ? `<div id="r-hero"></div><div class="day-layout">
-          <div class="col"><div id="r-events" class="slot-events"></div><div id="r-habits" class="slot-habits"></div></div>
-          <div class="col"><div id="r-tasks" class="slot-tasks"></div><div id="r-note" class="slot-note"></div></div>
+          <div class="col"><div id="r-events" class="slot-events"></div><div id="r-tasks" class="slot-tasks"></div></div>
+          <div class="col"><div id="r-diary" class="slot-diary"></div></div>
         </div>`
-      : '<div id="r-view"></div>';
+      : state.view === 'diary'
+        ? `<div class="diary-view">
+            <div class="search-bar"><span aria-hidden="true">🔍</span>
+              <input id="q" data-keep="1" data-input="query" type="search" value="${esc(state.query)}" placeholder="Buscar en todas mis notas…" aria-label="Buscar en el diario" autocomplete="off">
+              <button class="btn small" data-action="export-txt" title="Descargar todo el diario como archivo de texto">⬇ Descargar diario</button>
+            </div>
+            <div id="r-results"></div>
+          </div>`
+        : '<div id="r-view"></div>';
   }
   if (state.view === 'day') {
     const k = dkey(state.cursor);
     patch('r-hero', heroHTML(k));
     patch('r-events', eventsCard());
     patch('r-tasks', tasksCard(k));
-    patch('r-note', noteCard(k));
-    patch('r-habits', habitsCard(k));
+    patch('r-diary', diaryCard(k));
+  } else if (state.view === 'diary') {
+    patch('r-results', diaryResults());
   } else {
     patch('r-view', state.view === 'week' ? weekView() : monthView());
   }
@@ -106,7 +117,7 @@ function patch(id, html) {
   if (!el || cache[id] === html) return;
   const active = document.activeElement;
   const inside = active && el.contains(active);
-  if (inside && active.id === 'note' && active.dataset.day === dkey(state.cursor)) return;
+  if (inside && active.dataset.keep) return; // no pisar lo que se está escribiendo
   const focus = inside && active.id ? { id: active.id, s: active.selectionStart, e: active.selectionEnd } : null;
   el.innerHTML = html;
   cache[id] = html;
@@ -127,6 +138,7 @@ function autosize(t) {
 
 function periodLabel() {
   const c = state.cursor;
+  if (state.view === 'diary') return 'Mi diario';
   if (state.view === 'day') return cap((c.getFullYear() === new Date().getFullYear() ? fLong : fLongYear).format(c));
   if (state.view === 'week') {
     const s = startOfWeek(c);
@@ -150,9 +162,9 @@ function headerHTML() {
   return `<header class="top">
     <div class="brand"><span class="logo" aria-hidden="true">✦</span><span class="brand-name">Mi agenda</span></div>
     <nav class="nav" aria-label="Fechas">
-      <button class="icon-btn" data-action="prev" title="Anterior (←)" aria-label="Anterior">‹</button>
+      ${state.view === 'diary' ? '' : `<button class="icon-btn" data-action="prev" title="Anterior (←)" aria-label="Anterior">‹</button>
       <button class="btn ghost small ${isCurrentPeriod() ? 'is-current' : ''}" data-action="today" title="Ir a hoy (T)">Hoy</button>
-      <button class="icon-btn" data-action="next" title="Siguiente (→)" aria-label="Siguiente">›</button>
+      <button class="icon-btn" data-action="next" title="Siguiente (→)" aria-label="Siguiente">›</button>`}
       <h1 class="date-label">${esc(periodLabel())}</h1>
     </nav>
     <div class="tools">
@@ -190,9 +202,8 @@ function bannerHTML() {
 
 function heroHTML(k) {
   const d = store.getDay(k);
-  const habits = store.getHabits();
   const pending = d.tasks.filter(t => !t.movedTo && !t.done).length;
-  const hdone = habits.filter(h => d.habits[h.id]).length;
+  const notes = d.entries.length;
   const evCount = eventsOn(state.cursor).length;
   const hr = new Date().getHours();
   const isToday = sameDay(state.cursor, new Date());
@@ -203,7 +214,7 @@ function heroHTML(k) {
   const stats = [
     connected ? `<span class="stat s-ev"><b>${evCount}</b> ${evCount === 1 ? 'evento' : 'eventos'}</span>` : '',
     `<span class="stat s-task"><b>${pending}</b> ${pending === 1 ? 'tarea pendiente' : 'tareas pendientes'}</span>`,
-    habits.length ? `<span class="stat s-habit"><b>${hdone}/${habits.length}</b> hábitos</span>` : '',
+    `<span class="stat s-note"><b>${notes}</b> ${notes === 1 ? 'nota' : 'notas'}</span>`,
   ].join('');
   return `<section class="hero">
     <div><p class="greet">${greet}</p><p class="hero-sub">${isToday ? 'Así viene tu día' : esc(cap(fLong.format(state.cursor)))}</p></div>
@@ -281,39 +292,104 @@ function tasksCard(k) {
   </section>`;
 }
 
-function noteCard(k) {
-  const d = store.getDay(k);
-  return `<section class="card card-note">
-    <div class="card-h"><h2><span class="ic">✍️</span>Notas</h2></div>
-    <textarea id="note" class="note autosize" data-input="note" data-day="${k}" aria-label="Notas del día"
-      placeholder="¿Qué pasó hoy? Ideas, cosas para recordar, lo que quieras…">${esc(d.note)}</textarea>
-  </section>`;
+// ----- Diario: notas con fecha y hora exactas -----
+
+const fEntryDate = fmt({ weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const draftKey = k => `agenda.draft.${k}`;
+
+function stampHTML(e) {
+  const c = new Date(e.createdAt);
+  const edited = e.updatedAt - e.createdAt > 1500
+    ? ` <span class="edited" title="Editada el ${esc(fEntryDate.format(new Date(e.updatedAt)))} a las ${hms(new Date(e.updatedAt))}">· editada ${hm(new Date(e.updatedAt))}</span>` : '';
+  return `<time class="stamp" datetime="${c.toISOString()}" title="${esc(cap(fEntryDate.format(c)))} a las ${hms(c)}">
+    <span class="stamp-time">${hms(c)}</span><span class="stamp-date">${esc(cap(fEntryDate.format(c)))}</span>${edited}</time>`;
 }
 
-function streak(hid, k) {
-  let n = 0;
-  let d = fromKey(k);
-  while (store.getDay(dkey(d)).habits[hid] && n < 999) { n++; d = addDays(d, -1); }
-  return n;
-}
-
-function habitsCard(k) {
-  const d = store.getDay(k);
-  const habits = store.getHabits();
-  return `<section class="card card-habits">
-    <div class="card-h"><h2><span class="ic">🔥</span>Hábitos y ánimo</h2></div>
-    <div class="habits">${habits.map(h => {
-      const on = !!d.habits[h.id];
-      const s = on ? streak(h.id, k) : 0;
-      return `<button class="habit ${on ? 'on' : ''}" data-action="toggle-habit" data-id="${esc(h.id)}" aria-pressed="${on}">
-        <span aria-hidden="true">${esc(h.emoji)}</span>${esc(h.name)}${s > 1 ? `<span class="streak" title="${s} días seguidos">🔥${s}</span>` : ''}</button>`;
-    }).join('') || '<span class="muted small">Agregá hábitos desde ⚙ Ajustes.</span>'}</div>
-    <div class="mood-row">
-      <span class="muted">¿Cómo estuvo el día?</span>
-      <div class="moods">${MOODS.map((m, i) =>
-        `<button class="mood ${d.mood === i + 1 ? 'on' : ''}" data-action="mood" data-v="${i + 1}" title="${MOOD_NAMES[i]}" aria-label="${MOOD_NAMES[i]}" aria-pressed="${d.mood === i + 1}">${m}</button>`).join('')}</div>
+function entryHTML(e, day, showOpen = false) {
+  if (state.editing === e.id) {
+    return `<article class="entry editing">
+      ${stampHTML(e)}
+      <textarea id="edit-${e.id}" class="entry-edit" data-keep="1" rows="4" aria-label="Editar nota">${esc(e.text)}</textarea>
+      <div class="entry-actions">
+        <button class="btn small primary" data-action="save-entry" data-day="${day}" data-id="${e.id}">Guardar cambios</button>
+        <button class="btn small ghost" data-action="cancel-edit">Cancelar</button>
+      </div>
+    </article>`;
+  }
+  return `<article class="entry">
+    <div class="entry-top">${stampHTML(e)}
+      <span class="entry-btns">
+        ${showOpen ? `<button class="btn small ghost" data-action="goto" data-date="${day}">Abrir día</button>` : ''}
+        <button class="btn small ghost" data-action="edit-entry" data-id="${e.id}" data-day="${day}">Editar</button>
+        <button class="x" data-action="del-entry" data-day="${day}" data-id="${e.id}" aria-label="Borrar nota" title="Borrar nota">×</button>
+      </span>
     </div>
+    <p class="entry-text">${esc(e.text)}</p>
+  </article>`;
+}
+
+function diaryCard(k) {
+  const list = [...store.getDay(k).entries].sort((a, b) => b.createdAt - a.createdAt);
+  return `<section class="card card-diary">
+    <div class="card-h"><h2><span class="ic">📓</span>Diario</h2><span class="count">${list.length} ${list.length === 1 ? 'nota' : 'notas'}</span></div>
+    <form class="composer" data-form="add-entry" data-day="${k}">
+      <textarea id="composer" name="text" data-keep="1" data-input="draft" data-day="${k}" rows="4"
+        placeholder="¿Qué querés anotar? Ideas, lo que pasó, cosas para recordar…" aria-label="Nueva nota">${esc(lsGet(draftKey(k)) || '')}</textarea>
+      <div class="composer-bar">
+        <span class="muted small">Se guarda con la fecha y hora exactas · Ctrl+Enter</span>
+        <button class="btn primary small" type="submit">Guardar nota</button>
+      </div>
+    </form>
+    <div class="entries">${list.map(e => entryHTML(e, k)).join('') ||
+      '<p class="hint">Todavía no hay notas este día. Lo que escribas arriba queda guardado con su hora.</p>'}</div>
   </section>`;
+}
+
+// ----- vista Diario: todas las notas, con buscador -----
+
+function matchesQuery(e, q) {
+  if (!q) return true;
+  const c = new Date(e.createdAt);
+  const hay = `${e.text} ${fEntryDate.format(c)} ${e.day} ${hm(c)}`.toLowerCase();
+  return q.toLowerCase().split(/\s+/).filter(Boolean).every(w => hay.includes(w));
+}
+
+function diaryResults() {
+  const all = store.allEntries();
+  const list = all.filter(e => matchesQuery(e, state.query.trim()));
+  if (!all.length) {
+    return `<div class="card empty"><div class="empty-ic">📓</div><p><b>Tu diario está vacío</b></p>
+      <p class="muted small">Las notas que escribas en la vista Día aparecen acá, ordenadas por fecha y hora.</p></div>`;
+  }
+  if (!list.length) return `<div class="card empty"><div class="empty-ic">🔍</div><p>No encontré notas con “${esc(state.query)}”.</p></div>`;
+  const groups = [];
+  for (const e of list) {
+    const g0 = groups[groups.length - 1];
+    if (g0 && g0.day === e.day) g0.items.push(e); else groups.push({ day: e.day, items: [e] });
+  }
+  return `<p class="muted small results-count">${list.length} ${list.length === 1 ? 'nota' : 'notas'}${state.query.trim() ? ' encontradas' : ' en total'}</p>
+    ${groups.map(gr => `<section class="day-group">
+      <h3 class="day-head">${esc(cap(fEntryDate.format(fromKey(gr.day))))}</h3>
+      <div class="card entries">${gr.items.map(e => entryHTML(e, gr.day, true)).join('')}</div>
+    </section>`).join('')}`;
+}
+
+function exportDiaryTxt() {
+  const all = [...store.allEntries()].reverse();
+  if (!all.length) return toast('Todavía no hay notas para descargar.', true);
+  let out = 'MI DIARIO\r\n\r\n';
+  let last = '';
+  for (const e of all) {
+    if (e.day !== last) { out += `\r\n=== ${cap(fEntryDate.format(fromKey(e.day)))} ===\r\n`; last = e.day; }
+    const c = new Date(e.createdAt);
+    out += `\r\n[${hms(c)}] ${e.text.replace(/\r?\n/g, '\r\n')}\r\n`;
+  }
+  const blob = new Blob(['﻿' + out], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `mi-diario-${dkey(today())}.txt`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 // ----- vista Semana -----
@@ -330,14 +406,14 @@ function weekView() {
     return `<section class="wday ${sameDay(d, t) ? 'is-today' : ''} ${d < t ? 'is-past' : ''}">
       <button class="wday-h" data-action="goto" data-date="${k}" title="Abrir este día">
         <span class="wd">${esc(cap(fWeekday.format(d)))}</span><span class="dn">${d.getDate()}</span>
-        ${day.mood ? `<span class="mood-mini" title="${MOOD_NAMES[day.mood - 1]}">${MOODS[day.mood - 1]}</span>` : ''}
+        ${day.entries.length ? `<span class="note-count" title="Notas de este día">✎ ${day.entries.length}</span>` : ''}
       </button>
       <div class="wday-evs">${evs.map(e =>
         `<button class="pill" data-action="open-event" data-key="${esc(e.key)}" style="--c:${esc(e.color)}">${e.allDay ? '' : `<b>${hm(e.start)}</b> `}${esc(e.title)}</button>`).join('')}</div>
       ${act.length ? `<div class="wday-tasks">${act.slice(0, 5).map(x =>
         `<div class="mini-task ${x.done ? 'done' : ''}">${x.done ? '☑' : '☐'} ${esc(x.text)}</div>`).join('')}
         ${act.length > 5 ? `<div class="muted small">+${act.length - 5} más</div>` : ''}</div>` : ''}
-      ${day.note.trim() ? `<p class="wday-note" data-action="goto" data-date="${k}">${esc(day.note.trim().slice(0, 200))}</p>` : ''}
+      ${day.entries.slice(-2).map(e => `<p class="wday-note" data-action="goto" data-date="${k}"><b>${hm(new Date(e.createdAt))}</b> ${esc(e.text.slice(0, 120))}</p>`).join('')}
       <button class="add-mini" data-action="goto" data-date="${k}">Abrir día</button>
     </section>`;
   }).join('')}</div>`;
@@ -359,10 +435,10 @@ function monthView() {
     const act = day.tasks.filter(x => !x.movedTo);
     const done = act.filter(x => x.done).length;
     cells += `<button class="mcell ${d.getMonth() !== m ? 'out' : ''} ${sameDay(d, t) ? 'is-today' : ''}" data-action="goto" data-date="${k}" aria-label="${esc(fLong.format(d))}">
-      <span class="mtop"><span class="mnum">${d.getDate()}</span>${day.mood ? `<span class="mmood">${MOODS[day.mood - 1]}</span>` : ''}</span>
+      <span class="mtop"><span class="mnum">${d.getDate()}</span>${day.entries.length ? `<span class="mmood" title="Notas de este día">✎ ${day.entries.length}</span>` : ''}</span>
       <span class="mevs">${evs.slice(0, 3).map(e => `<span class="mpill" style="--c:${esc(e.color)}">${esc(e.title)}</span>`).join('')}
         ${evs.length > 3 ? `<span class="more">+${evs.length - 3}</span>` : ''}</span>
-      <span class="mfoot">${act.length ? `<span class="mtasks" title="Tareas hechas">✓ ${done}/${act.length}</span>` : ''}${day.note.trim() ? '<span title="Tiene notas">✎</span>' : ''}</span>
+      <span class="mfoot">${act.length ? `<span class="mtasks" title="Tareas hechas">✓ ${done}/${act.length}</span>` : ''}</span>
     </button>`;
   }
   return `<div class="month">${heads}${cells}</div>`;
@@ -371,6 +447,7 @@ function monthView() {
 // ---------- eventos de Google ----------
 
 async function loadEvents(force = false) {
+  if (state.view === 'diary') return;
   if (!g.isConfigured() || !g.getAccounts().some(g.isValid)) {
     if (state.loading) { state.loading = false; render(); }
     return;
@@ -544,28 +621,19 @@ function settingsHTML() {
     : `${accs.map(accountHTML).join('') || '<p class="muted">Todavía no conectaste ninguna cuenta.</p>'}
       <button class="btn primary" data-action="add-account">+ Agregar cuenta de Google</button>
       <p class="muted small">${main
-        ? `Tus notas, tareas y hábitos se guardan en el Google Drive de <b>${esc(main.email)}</b>, en una carpeta oculta que solo usa esta app.`
+        ? `Tu diario y tus tareas se guardan en el Google Drive de <b>${esc(main.email)}</b>, en una carpeta oculta que solo usa esta app.`
         : 'Tus notas se guardan solo en este dispositivo. Elegí una cuenta para guardarlas en Drive y verlas también desde el celular.'}</p>`;
   return `<h3>Ajustes</h3>
     <h4>Cuentas de Google</h4>
     ${google}
-    <h4>Hábitos</h4>
-    ${store.getHabits().map(h => `<div class="hrow">
-      <input class="emoji-in" data-change="habit-emoji" data-id="${esc(h.id)}" value="${esc(h.emoji)}" maxlength="8" aria-label="Emoji">
-      <input data-change="habit-name" data-id="${esc(h.id)}" value="${esc(h.name)}" aria-label="Nombre del hábito">
-      <button class="x" data-action="del-habit" data-id="${esc(h.id)}" aria-label="Borrar hábito">×</button></div>`).join('')}
-    <form class="hrow" data-form="add-habit" autocomplete="off">
-      <input class="emoji-in" name="emoji" placeholder="⭐" maxlength="8" aria-label="Emoji">
-      <input name="name" placeholder="Nuevo hábito (ej: Meditar)" aria-label="Nuevo hábito">
-      <button class="btn small">Agregar</button>
-    </form>
     <h4>Copia de seguridad</h4>
     <div class="acc-actions">
-      <button class="btn small" data-action="export">Descargar copia</button>
+      <button class="btn small" data-action="export-txt">Descargar diario (.txt)</button>
+      <button class="btn small" data-action="export">Descargar copia completa</button>
       <label class="btn small ghost">Restaurar copia<input type="file" accept="application/json,.json" data-change="import" hidden></label>
     </div>
     <div class="dlg-actions">
-      <span class="muted small keys">Atajos: ← → moverte · T hoy · D/S/M vistas · N nuevo evento</span>
+      <span class="muted small keys">Atajos: ← → moverte · T hoy · D/S/M/J vistas · N nuevo evento</span>
       <span class="spacer"></span>
       <button class="btn" data-dlg="cancel">Listo</button>
     </div>`;
@@ -625,6 +693,7 @@ function toast(msg, bad = false) {
 const dayKey = () => dkey(state.cursor);
 
 function move(n) {
+  if (state.view === 'diary') return;
   const c = state.cursor;
   if (state.view === 'day') state.cursor = addDays(c, n);
   else if (state.view === 'week') state.cursor = addDays(c, 7 * n);
@@ -684,11 +753,30 @@ document.addEventListener('click', e => {
     case 'del-task':
       store.updateDay(dayKey(), day => { day.tasks = day.tasks.filter(x => x.id !== d.id); });
       return render();
-    case 'toggle-habit':
-      store.updateDay(dayKey(), day => { if (day.habits[d.id]) delete day.habits[d.id]; else day.habits[d.id] = true; });
+    case 'edit-entry':
+      state.editing = d.id;
+      render();
+      {
+        const ta = document.getElementById(`edit-${d.id}`);
+        if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+      }
+      return;
+    case 'cancel-edit':
+      state.editing = null;
+      document.activeElement?.blur();
       return render();
-    case 'mood':
-      store.updateDay(dayKey(), day => { day.mood = day.mood === Number(d.v) ? null : Number(d.v); });
+    case 'save-entry': {
+      const text = document.getElementById(`edit-${d.id}`)?.value.trim();
+      if (!text) return toast('La nota no puede quedar vacía. Para borrarla usá la ×.', true);
+      store.editEntry(d.day, d.id, text);
+      state.editing = null;
+      document.activeElement?.blur();
+      render();
+      return toast('Cambios guardados');
+    }
+    case 'del-entry':
+      if (!confirm('¿Borrar esta nota? No se puede deshacer.')) return;
+      store.deleteEntry(d.day, d.id);
       return render();
     // Estas llaman a Google en el mismo clic para que el navegador no bloquee la ventana.
     case 'add-account': return withGoogle(g.addAccount(), 'Cuenta conectada');
@@ -700,11 +788,8 @@ document.addEventListener('click', e => {
         afterAccountsChange();
       }
       return;
-    case 'del-habit':
-      store.setHabits(store.getHabits().filter(h => h.id !== d.id));
-      refreshSettings();
-      return render();
     case 'export': return exportBackup();
+    case 'export-txt': return exportDiaryTxt();
   }
 });
 
@@ -728,22 +813,19 @@ document.addEventListener('change', e => {
       state.eventsKey = '';
       render();
       return loadEvents(true);
-    case 'habit-emoji':
-    case 'habit-name': {
-      const field = t.dataset.change === 'habit-emoji' ? 'emoji' : 'name';
-      store.setHabits(store.getHabits().map(h => (h.id === id ? { ...h, [field]: t.value.trim() || h[field] } : h)));
-      refreshSettings();
-      return render();
-    }
     case 'import': return importBackup(t);
   }
 });
 
 document.addEventListener('input', e => {
   const t = e.target;
-  if (t.dataset.input === 'note') {
-    store.updateDay(t.dataset.day, day => { day.note = t.value; });
-    autosize(t);
+  if (t.dataset.input === 'draft') {
+    // El borrador queda guardado aunque cierres la pestaña antes de apretar "Guardar nota".
+    if (t.value) lsSet(draftKey(t.dataset.day), t.value);
+    else try { localStorage.removeItem(draftKey(t.dataset.day)); } catch {}
+  } else if (t.dataset.input === 'query') {
+    state.query = t.value;
+    render();
   }
 });
 
@@ -758,17 +840,26 @@ document.addEventListener('submit', e => {
     store.updateDay(dayKey(), day => { day.tasks.push({ id: store.newId(), text: v, done: false }); });
     f.elements.text.value = '';
     render();
-  } else if (kind === 'add-habit') {
-    const name = f.elements.name.value.trim();
-    if (!name) return;
-    store.setHabits([...store.getHabits(), { id: store.newId(), emoji: f.elements.emoji.value.trim() || '⭐', name }]);
-    refreshSettings();
+  } else if (kind === 'add-entry') {
+    const text = f.elements.text.value.trim();
+    if (!text) return;
+    const k = f.dataset.day;
+    store.addEntry(k, text);
+    try { localStorage.removeItem(draftKey(k)); } catch {}
+    document.activeElement?.blur();
     render();
-    $('[data-form="add-habit"] [name="name"]', settingsDlg)?.focus();
+    $('#composer')?.focus();
+    toast('Nota guardada');
   }
 });
 
 document.addEventListener('keydown', e => {
+  const t = e.target;
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (t.id === 'composer') { e.preventDefault(); t.form.requestSubmit(); return; }
+    if (t.classList?.contains('entry-edit')) { e.preventDefault(); t.closest('.entry')?.querySelector('[data-action=save-entry]')?.click(); return; }
+  }
+  if (e.key === 'Escape' && t.classList?.contains('entry-edit')) { state.editing = null; t.blur(); render(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey || $('dialog[open]')) return;
   if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
   const k = e.key.toLowerCase();
@@ -778,6 +869,7 @@ document.addEventListener('keydown', e => {
   else if (k === 'd') setView('day');
   else if (k === 's') setView('week');
   else if (k === 'm') setView('month');
+  else if (k === 'j') setView('diary');
   else if (k === 'n') { e.preventDefault(); openEvent(null, dayKey()); }
 });
 

@@ -1,4 +1,4 @@
-// Datos de la agenda (notas, tareas, hábitos, ánimo).
+// Datos de la agenda (diario de notas y tareas).
 // Se guardan siempre en este navegador y, si hay una cuenta principal conectada,
 // se sincronizan con un archivo oculto (appDataFolder) en su Google Drive.
 
@@ -8,15 +8,10 @@ const DRIVE_FILE_NAME = 'mi-agenda-datos.json';
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UP = 'https://www.googleapis.com/upload/drive/v3';
 
-const DEFAULT_HABITS = [
-  { id: 'agua', emoji: '💧', name: 'Agua' },
-  { id: 'ejercicio', emoji: '🏃', name: 'Ejercicio' },
-  { id: 'lectura', emoji: '📖', name: 'Lectura' },
-  { id: 'descanso', emoji: '😴', name: 'Dormir bien' },
-];
-
-const emptyData = () => ({ version: 1, days: {}, habits: DEFAULT_HABITS, habitsUpdatedAt: 0 });
-const emptyDay = () => ({ note: '', tasks: [], habits: {}, mood: null, updatedAt: 0 });
+// Cada día tiene `entries` (las notas del diario, con la fecha y hora exacta en que se escribieron)
+// y `tasks`. Los campos viejos (note, habits, mood) se ignoran o se convierten al cargar.
+const emptyData = () => ({ version: 1, days: {} });
+const emptyDay = () => ({ entries: [], tasks: [], updatedAt: 0 });
 
 let data = loadLocal();
 const listeners = new Set();
@@ -41,9 +36,48 @@ export function subscribe(fn) { listeners.add(fn); }
 
 export const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+// Devuelve el día normalizado. Si venía con una nota única de la versión anterior,
+// la convierte en una entrada del diario (con la última hora en que se editó ese día).
 export function getDay(key) {
-  const d = data.days[key];
-  return d ? { ...emptyDay(), ...d } : emptyDay();
+  const raw = data.days[key];
+  if (!raw) return emptyDay();
+  const d = { ...emptyDay(), ...raw };
+  d.entries = Array.isArray(raw.entries) ? raw.entries : [];
+  if (typeof raw.note === 'string' && raw.note.trim()) {
+    const at = raw.updatedAt || new Date(`${key}T12:00:00`).getTime();
+    d.entries = [{ id: `legacy-${key}`, text: raw.note.trim(), createdAt: at, updatedAt: at }, ...d.entries];
+  }
+  delete d.note;
+  delete d.habits;
+  delete d.mood;
+  return d;
+}
+
+// Todas las notas de todos los días, de la más nueva a la más vieja.
+export function allEntries() {
+  const out = [];
+  for (const key of Object.keys(data.days)) {
+    for (const e of getDay(key).entries) out.push({ ...e, day: key });
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function addEntry(key, text) {
+  const now = Date.now();
+  const entry = { id: newId(), text, createdAt: now, updatedAt: now };
+  updateDay(key, d => { d.entries.push(entry); });
+  return entry;
+}
+
+export function editEntry(key, id, text) {
+  updateDay(key, d => {
+    const e = d.entries.find(x => x.id === id);
+    if (e && e.text !== text) { e.text = text; e.updatedAt = Date.now(); }
+  });
+}
+
+export function deleteEntry(key, id) {
+  updateDay(key, d => { d.entries = d.entries.filter(x => x.id !== id); });
 }
 
 export function updateDay(key, fn) {
@@ -51,14 +85,6 @@ export function updateDay(key, fn) {
   fn(d);
   d.updatedAt = Date.now();
   data.days[key] = d;
-  changed();
-}
-
-export const getHabits = () => data.habits;
-
-export function setHabits(list) {
-  data.habits = list;
-  data.habitsUpdatedAt = Date.now();
   changed();
 }
 
@@ -96,8 +122,10 @@ export const exportJSON = () => JSON.stringify(data, null, 2);
 
 export function importData(obj) {
   const now = Date.now();
-  for (const [k, d] of Object.entries(obj.days || {})) data.days[k] = { ...emptyDay(), ...d, updatedAt: now };
-  if (Array.isArray(obj.habits)) { data.habits = obj.habits; data.habitsUpdatedAt = now; }
+  for (const [k, d] of Object.entries(obj.days || {})) {
+    data.days[k] = { ...emptyDay(), ...d };
+    data.days[k] = { ...getDay(k), updatedAt: now };
+  }
   changed();
 }
 
@@ -167,13 +195,6 @@ function merge(remote) {
     if (rt > lt) { data.days[k] = remote.days[k]; localChanged = true; }
     else if (lt > rt) remoteStale = true;
   }
-  const lh = data.habitsUpdatedAt || 0;
-  const rh = remote.habitsUpdatedAt || 0;
-  if (rh > lh && Array.isArray(remote.habits)) {
-    data.habits = remote.habits;
-    data.habitsUpdatedAt = rh;
-    localChanged = true;
-  } else if (lh > rh) remoteStale = true;
   return { localChanged, remoteStale };
 }
 
