@@ -103,7 +103,7 @@ export function migrateTasks(todayKey) {
     for (const t of nd.tasks) {
       if (t.done || t.movedTo) continue;
       t.movedTo = todayKey;
-      moved.push({ id: t.id, text: t.text, done: false, from: t.from || k });
+      moved.push({ id: t.id, text: t.text, done: false, from: t.from || k, createdAt: t.createdAt });
     }
     nd.updatedAt = now;
     data.days[k] = nd;

@@ -270,6 +270,15 @@ function eventRow(e, day) {
   </button>`;
 }
 
+// "Creada 6/10 15:42:07 · Hecha 6/10 16:10:33" (las tareas viejas, sin fecha, no muestran nada)
+function taskMeta(t) {
+  const stamp = ms => { const d = new Date(ms); return `${fShort(d)} ${hms(d)}`; };
+  const parts = [];
+  if (t.createdAt) parts.push(`<span title="Fecha y hora en que la creaste">🕒 Creada ${stamp(t.createdAt)}</span>`);
+  if (t.done && t.doneAt) parts.push(`<span class="task-done-at" title="Fecha y hora en que la completaste">✓ Hecha ${stamp(t.doneAt)}</span>`);
+  return parts.length ? `<div class="task-meta">${parts.join('')}</div>` : '';
+}
+
 function tasksCard(k) {
   const d = store.getDay(k);
   const active = d.tasks.filter(t => !t.movedTo);
@@ -277,9 +286,12 @@ function tasksCard(k) {
   const items = d.tasks.map(t => t.movedTo
     ? `<li class="task moved"><span class="moved-text">${esc(t.text)}</span><span class="tag" title="Pasó a otro día">→ ${fShort(fromKey(t.movedTo))}</span></li>`
     : `<li class="task ${t.done ? 'done' : ''}">
-        <input type="checkbox" data-change="toggle-task" data-id="${t.id}" ${t.done ? 'checked' : ''} aria-label="Marcar como hecha">
-        <input class="task-text" id="task-${t.id}" data-change="task-text" data-id="${t.id}" value="${esc(t.text)}" aria-label="Tarea">
-        ${t.from ? `<span class="tag" title="Pendiente desde el ${fShort(fromKey(t.from))}">↩ ${fShort(fromKey(t.from))}</span>` : ''}
+        <input type="checkbox" data-change="toggle-task" data-id="${t.id}" ${t.done ? 'checked' : ''} aria-label="Marcar como hecha" title="${t.done ? 'Desmarcar' : 'Marcar como hecha'}">
+        <div class="task-body">
+          <input class="task-text" id="task-${t.id}" data-change="task-text" data-id="${t.id}" value="${esc(t.text)}" aria-label="Tarea">
+          ${taskMeta(t)}
+        </div>
+        ${t.from ?`<span class="tag" title="Pendiente desde el ${fShort(fromKey(t.from))}">↩ ${fShort(fromKey(t.from))}</span>` : ''}
         <button class="x" data-action="del-task" data-id="${t.id}" aria-label="Borrar tarea">×</button>
       </li>`).join('');
   return `<section class="card card-tasks">
@@ -798,7 +810,7 @@ document.addEventListener('change', e => {
   const id = t.dataset.id;
   switch (t.dataset.change) {
     case 'toggle-task':
-      store.updateDay(dayKey(), day => { const x = day.tasks.find(x => x.id === id); if (x) x.done = t.checked; });
+      store.updateDay(dayKey(), day => { const x = day.tasks.find(x => x.id === id); if (x) { x.done = t.checked; if (t.checked) x.doneAt = Date.now(); else delete x.doneAt; } });
       return render();
     case 'task-text': {
       const v = t.value.trim();
@@ -837,7 +849,7 @@ document.addEventListener('submit', e => {
   if (kind === 'add-task') {
     const v = f.elements.text.value.trim();
     if (!v) return;
-    store.updateDay(dayKey(), day => { day.tasks.push({ id: store.newId(), text: v, done: false }); });
+    store.updateDay(dayKey(), day => { day.tasks.push({ id: store.newId(), text: v, done: false, createdAt: Date.now() }); });
     f.elements.text.value = '';
     render();
   } else if (kind === 'add-entry') {
